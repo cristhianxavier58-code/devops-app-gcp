@@ -1,0 +1,51 @@
+# Usar imagem oficial Node.js LTS
+FROM node:18-alpine AS builder
+
+# Definir diretório de trabalho
+WORKDIR /app
+
+# Copiar arquivos de dependências
+COPY package*.json ./
+
+# Instalar dependências
+RUN npm ci --only=production && npm cache clean --force
+
+# Copiar código da aplicação
+COPY . .
+
+#Stage 2: Run (A imagem que vai apra o google artifact registry)
+FROM node:18-alpine AS runner 
+WORKDIR /app
+
+#Definir variáveis de ambiente de produção
+ENV NODE_ENV=production
+ENV PORT=3000
+
+#1. Segurança: Usar o usuário 'node' que já existe no Alpine
+#Garantimos que a pasta pertence ao usuário antes de mudar para ele
+RUN chown -R node:node /app
+
+#2. Copiar apenas o estritamente necessario do estágio de bUILD
+# --chown=node:node garante que os arquivos copiados tenham a permissão correta
+COPY --from=builder --chown=node:node /app/package*.json ./
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/server.js ./server.js
+#Se você tiver uma pasta de build (dist ou .next), copie-a aqui:
+# COPY --from=builder --chown=node:node /app/dist ./dist
+
+#Mudar para o usuário não-root
+USER node
+
+#Expor a porta
+EXPOSE 3000
+
+# 3. Healtcheck (Padrão SRE)
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 CMD \
+    CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
+
+
+#4. Prevenção de 00M (Out of Memory)
+#Se o seu container no GCP tiver 512MB de RAM, por exemplo, você pode definir o limite de memória do Node para 256MB:
+# Isso força o Garbage Collector a ser mais agressivo e evita que o processo seja finalizado por exceder a memória disponível.
+CMD ["node", "--max-old-space-size=400", "server.js"]
+docker build -t  teste:1.0 -f Dockerfile.prod .
